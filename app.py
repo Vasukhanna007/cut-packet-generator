@@ -224,46 +224,62 @@ def _extract_from_variant_or_title(variant, title):
     return None
 
 def _is_single_item_product(title, variant):
-    """Detect if product is a single item (top-only, bottom-only, accessory) vs a set."""
-    text = f"{title or ''} {variant or ''}".lower()
+    """Detect if product is a single item (top-only, bottom-only, accessory) vs a set.
     
-    # Check for accessories first (these have no sizes)
-    for acc in ACCESSORY_KEYWORDS:
-        if re.search(rf"\b{re.escape(acc)}\b", text, re.I):
-            # Check if it's explicitly excluded
-            if not re.search(rf"\b(no|without)\s+{re.escape(acc)}\b", text, re.I):
-                return "accessory"  # Accessories have no sizes
+    Logic:
+    1. If sizing format is "X / Y" (two sizes) → it's a set
+    2. If sizing is single "X" → check keywords to determine top or bottom
+    3. If no size found → it's an accessory
+    """
+    text = f"{title or ''} {variant or ''}"
     
-    # Keywords for top-only items (excluding accessories already checked)
+    # First, check if it has two sizes in format "X / Y" - this indicates a set
+    two_size_pattern = re.search(
+        r"-\s*(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|FREE SIZE|[2-5]\d)\s*/\s*"
+        r"(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|FREE SIZE|[2-5]\d)\b", text, re.I
+    )
+    if two_size_pattern:
+        return None  # It's a set (has two sizes)
+    
+    # Check if it has a single size (after dash or in text)
+    single_size_pattern = re.search(
+        r"-\s*(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|FREE SIZE|[2-5]\d)\b", text, re.I
+    )
+    has_single_size = single_size_pattern is not None
+    
+    # If no size found, it's an accessory
+    if not has_single_size:
+        # Check for accessory keywords to confirm
+        text_lower = text.lower()
+        for acc in ACCESSORY_KEYWORDS:
+            if re.search(rf"\b{re.escape(acc)}\b", text_lower, re.I):
+                if not re.search(rf"\b(no|without)\s+{re.escape(acc)}\b", text_lower, re.I):
+                    return "accessory"
+        # If no accessory keyword but no size, still treat as accessory
+        return "accessory"
+    
+    # Has single size - check keywords to determine if top or bottom
+    text_lower = text.lower()
+    
+    # Keywords for top-only items
     top_only_keywords = ["top", "kurta", "shirt", "blouse", "tunic", "kurti", "cape", 
                          "jacket", "blazer", "coat"]
     # Keywords for bottom-only items
     bottom_only_keywords = ["bottom", "pant", "pants", "trouser", "trousers", "leggings", 
                            "palazzo", "salwar", "churidar", "dhoti", "farshi"]
-    # Keywords that indicate a set (both top and bottom)
-    set_keywords = ["set", "combo", "pair", "suit", "outfit"]
     
-    # Check for set keywords first
-    for kw in set_keywords:
-        if re.search(rf"\b{re.escape(kw)}\b", text, re.I):
-            return None  # It's a set, not a single item
+    # Check for bottom keywords first (more specific)
+    for kw in bottom_only_keywords:
+        if re.search(rf"\b{re.escape(kw)}\b", text_lower, re.I):
+            return "bottom"
     
-    # IMPORTANT: Check if product contains BOTH top and bottom keywords - if so, it's a set
-    has_top = any(re.search(rf"\b{re.escape(kw)}\b", text, re.I) for kw in top_only_keywords)
-    has_bottom = any(re.search(rf"\b{re.escape(kw)}\b", text, re.I) for kw in bottom_only_keywords)
+    # Check for top keywords
+    for kw in top_only_keywords:
+        if re.search(rf"\b{re.escape(kw)}\b", text_lower, re.I):
+            return "top"
     
-    if has_top and has_bottom:
-        return None  # It's a set (has both top and bottom), not a single item
-    
-    # Check for top-only (only if no bottom keywords found)
-    if has_top:
-        return "top"
-    
-    # Check for bottom-only (only if no top keywords found)
-    if has_bottom:
-        return "bottom"
-    
-    return None  # Unknown, treat as potential set
+    # Has size but no clear keyword - default to top (most common)
+    return "top"
 
 def _extract_two_sizes_from_variant_or_title(variant, title):
     """Return (top_size, bottom_size) using ' - X / Y' if present, else first two tokens."""
