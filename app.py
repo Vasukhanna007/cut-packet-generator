@@ -117,8 +117,13 @@ def _build_order_notes_map(df, order_col: str, notes_col: str | None):
     return s
 
 def _is_unfulfilled(val):
+    """Return True if item is unfulfilled, False if fulfilled."""
     if pd.isna(val): return True
     s = str(val).strip().lower()
+    # If explicitly "fulfilled", it's NOT unfulfilled
+    if s == "fulfilled":
+        return False
+    # Otherwise, check for unfulfilled indicators
     return (s == "") or ("unfulfilled" in s) or ("pending" in s) or ("not fulfilled" in s)
 
 def _is_unfulfilled_series(series):
