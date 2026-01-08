@@ -562,8 +562,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed"  # Collapsed on mobile for better rendering
 )
 
-st.title("✂️ Cut Packet Generator (Streamlit)")
-st.caption("Upload Shopify CSV → select Base Product(s) (dropdown shows count, most active first) → optional filters → download Excel. Section B uses SUMIFS so totals auto-update.")
+st.title("✂️ Cut Packet Generator")
+st.caption("Upload Shopify CSV → select Base Product(s) → optional filters → download Excel")
 
 with st.sidebar:
     st.header("Filters")
