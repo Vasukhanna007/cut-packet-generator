@@ -56,7 +56,10 @@ def _detect_columns(df):
     cols["variant"] = _find_col(df, ["Lineitem variant","Variant Title","Variant","Lineitem variant title"])
     cols["qty"] = _find_col(df, ["Lineitem quantity","Quantity","Qty"])
     cols["date"] = _find_col(df, ["Created at","Created At","Order Date","Processed at","Paid at","created_at"])
-    cols["fulfillment"] = _find_col(df, ["Fulfillment Status","Fulfillment status","fulfillment_status"])
+    # Prioritize lineitem fulfillment status over order-level fulfillment status
+    cols["fulfillment"] = _find_col(df, ["Lineitem fulfillment status", "Lineitem Fulfillment Status", 
+                                         "lineitem fulfillment status", "Fulfillment Status", 
+                                         "Fulfillment status", "fulfillment_status"])
     cols["notes"] = _find_col(df, ["Notes","Order Notes","note"])
     cols["prop_cols"] = [c for c in df.columns if "lineitem properties" in c.lower()]
     return cols
