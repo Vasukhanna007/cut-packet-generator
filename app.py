@@ -16,7 +16,7 @@ import streamlit as st
 # ====== Core Settings ====
 # =========================
 
-ACCESSORY_KEYWORDS = ["potli","bag","pouch","dupatta","scarf","shawl","belt","cap","mask"]
+ACCESSORY_KEYWORDS = ["potli","bag","pouch","dupatta","scarf","shawl","stole","belt","cap","mask"]
 ALPHA_ORDER = ["XXXS","XXS","XS","S","M","L","XL","XXL","XXXL","FREE SIZE"]
 SIZE_TOKEN = r"(XXXL|XXL|XL|XXS|XS|S|M|L|XXXS|FREE SIZE|[2-5]\d)"
 
