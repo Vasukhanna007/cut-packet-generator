@@ -57,9 +57,17 @@ def _detect_columns(df):
     cols["qty"] = _find_col(df, ["Lineitem quantity","Quantity","Qty"])
     cols["date"] = _find_col(df, ["Created at","Created At","Order Date","Processed at","Paid at","created_at"])
     # Prioritize lineitem fulfillment status over order-level fulfillment status
-    cols["fulfillment"] = _find_col(df, ["Lineitem fulfillment status", "Lineitem Fulfillment Status", 
-                                         "lineitem fulfillment status", "Fulfillment Status", 
-                                         "Fulfillment status", "fulfillment_status"])
+    # Try exact match first for "Lineitem fulfillment status" (most common in Shopify exports)
+    cols["fulfillment"] = None
+    for col_name in df.columns:
+        if col_name.strip().lower() == "lineitem fulfillment status":
+            cols["fulfillment"] = col_name
+            break
+    # Fallback to other variations
+    if not cols["fulfillment"]:
+        cols["fulfillment"] = _find_col(df, ["Lineitem fulfillment status", "Lineitem Fulfillment Status", 
+                                             "lineitem fulfillment status", "Fulfillment Status", 
+                                             "Fulfillment status", "fulfillment_status"])
     cols["notes"] = _find_col(df, ["Notes","Order Notes","note"])
     cols["prop_cols"] = [c for c in df.columns if "lineitem properties" in c.lower()]
     return cols
@@ -513,9 +521,11 @@ def generate_cut_packet_generic_df(
         missing = norm["_DateLocal"].isna()
         norm.loc[missing, "_DateLocal"] = fill_vals[missing]
 
-    # Only unfulfilled
+    # Only unfulfilled - filter out fulfilled items
     if only_unfulfilled and "_FulfillmentStatus" in norm.columns:
-        norm = norm[_is_unfulfilled_series(norm["_FulfillmentStatus"])].copy()
+        # Keep only items where _is_unfulfilled returns True (i.e., exclude fulfilled items)
+        unfulfilled_mask = _is_unfulfilled_series(norm["_FulfillmentStatus"])
+        norm = norm[unfulfilled_mask].copy()
 
     # Last 3 months by default
     if last_3_months_default:
