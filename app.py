@@ -554,7 +554,12 @@ def write_excel_with_formulas_to_buffer(secA: pd.DataFrame, size_cols: List[str]
 # ========= UI ============
 # =========================
 
-st.set_page_config(page_title="Cut Packet Generator", page_icon="✂️", layout="wide")
+st.set_page_config(
+    page_title="Cut Packet Generator", 
+    page_icon="✂️", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 st.title("✂️ Cut Packet Generator (Streamlit)")
 st.caption("Upload Shopify CSV → select Base Product(s) (dropdown shows count, most active first) → optional filters → download Excel. Section B uses SUMIFS so totals auto-update.")
