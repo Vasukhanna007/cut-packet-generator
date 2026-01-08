@@ -559,7 +559,7 @@ st.set_page_config(
     page_title="Cut Packet Generator", 
     page_icon="✂️", 
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"  # Collapsed on mobile for better rendering
 )
 
 st.title("✂️ Cut Packet Generator (Streamlit)")
@@ -580,12 +580,12 @@ with st.sidebar:
 
 uploaded = st.file_uploader("Upload Shopify Orders CSV", type=["csv"])
 
-# Date range
-c1, c2 = st.columns(2)
+# Date range - stack on mobile, side-by-side on desktop
+c1, c2 = st.columns([1, 1])
 with c1:
-    start = st.date_input("Start date (optional)", value=None)
+    start = st.date_input("Start date (optional)", value=None, key="start_date")
 with c2:
-    end = st.date_input("End date (optional)", value=None)
+    end = st.date_input("End date (optional)", value=None, key="end_date")
 
 # Advanced size controls
 with st.expander("Advanced size controls (optional)", expanded=False):
