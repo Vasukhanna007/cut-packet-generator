@@ -239,7 +239,7 @@ def _is_single_item_product(title, variant):
                          "jacket", "blazer", "coat"]
     # Keywords for bottom-only items
     bottom_only_keywords = ["bottom", "pant", "pants", "trouser", "trousers", "leggings", 
-                           "palazzo", "salwar", "churidar", "dhoti"]
+                           "palazzo", "salwar", "churidar", "dhoti", "farshi"]
     # Keywords that indicate a set (both top and bottom)
     set_keywords = ["set", "combo", "pair", "suit", "outfit"]
     
@@ -248,15 +248,20 @@ def _is_single_item_product(title, variant):
         if re.search(rf"\b{re.escape(kw)}\b", text, re.I):
             return None  # It's a set, not a single item
     
-    # Check for top-only
-    for kw in top_only_keywords:
-        if re.search(rf"\b{re.escape(kw)}\b", text, re.I):
-            return "top"
+    # IMPORTANT: Check if product contains BOTH top and bottom keywords - if so, it's a set
+    has_top = any(re.search(rf"\b{re.escape(kw)}\b", text, re.I) for kw in top_only_keywords)
+    has_bottom = any(re.search(rf"\b{re.escape(kw)}\b", text, re.I) for kw in bottom_only_keywords)
     
-    # Check for bottom-only
-    for kw in bottom_only_keywords:
-        if re.search(rf"\b{re.escape(kw)}\b", text, re.I):
-            return "bottom"
+    if has_top and has_bottom:
+        return None  # It's a set (has both top and bottom), not a single item
+    
+    # Check for top-only (only if no bottom keywords found)
+    if has_top:
+        return "top"
+    
+    # Check for bottom-only (only if no top keywords found)
+    if has_bottom:
+        return "bottom"
     
     return None  # Unknown, treat as potential set
 
