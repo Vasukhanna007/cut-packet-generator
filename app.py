@@ -189,6 +189,43 @@ def _extract_from_variant_or_title(variant, title):
     if m: return m.group(1)
     return None
 
+def _is_single_item_product(title, variant):
+    """Detect if product is a single item (top-only, bottom-only, accessory) vs a set."""
+    text = f"{title or ''} {variant or ''}".lower()
+    
+    # Check for accessories first (these have no sizes)
+    for acc in ACCESSORY_KEYWORDS:
+        if re.search(rf"\b{re.escape(acc)}\b", text, re.I):
+            # Check if it's explicitly excluded
+            if not re.search(rf"\b(no|without)\s+{re.escape(acc)}\b", text, re.I):
+                return "accessory"  # Accessories have no sizes
+    
+    # Keywords for top-only items (excluding accessories already checked)
+    top_only_keywords = ["top", "kurta", "shirt", "blouse", "tunic", "kurti", "cape", 
+                         "jacket", "blazer", "coat"]
+    # Keywords for bottom-only items
+    bottom_only_keywords = ["bottom", "pant", "pants", "trouser", "trousers", "leggings", 
+                           "palazzo", "salwar", "churidar", "dhoti"]
+    # Keywords that indicate a set (both top and bottom)
+    set_keywords = ["set", "combo", "pair", "suit", "outfit"]
+    
+    # Check for set keywords first
+    for kw in set_keywords:
+        if re.search(rf"\b{re.escape(kw)}\b", text, re.I):
+            return None  # It's a set, not a single item
+    
+    # Check for top-only
+    for kw in top_only_keywords:
+        if re.search(rf"\b{re.escape(kw)}\b", text, re.I):
+            return "top"
+    
+    # Check for bottom-only
+    for kw in bottom_only_keywords:
+        if re.search(rf"\b{re.escape(kw)}\b", text, re.I):
+            return "bottom"
+    
+    return None  # Unknown, treat as potential set
+
 def _extract_two_sizes_from_variant_or_title(variant, title):
     """Return (top_size, bottom_size) using ' - X / Y' if present, else first two tokens."""
     def _tok2(txt):
@@ -202,7 +239,7 @@ def _extract_two_sizes_from_variant_or_title(variant, title):
         toks = re.findall(r"(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|FREE SIZE|[2-5]\d)", T, flags=re.I)
         toks = [t.upper() for t in toks]
         if len(toks) >= 2: return toks[0], toks[1]
-        if len(toks) == 1: return toks[0], toks[0]
+        if len(toks) == 1: return toks[0], None  # Don't duplicate single size
         return (None, None)
     t1, t2 = _tok2(title)
     if t1 or t2: return t1, t2
@@ -275,6 +312,54 @@ def _normalize_components(df, cols) -> pd.DataFrame:
         created_dt = _parse_any_date(created)
         prop_text = _combine_properties_text(r, cols["prop_cols"]) if cols["prop_cols"] else ""
 
+        # Detect if this is a single item (top-only, bottom-only, accessory) vs a set
+        single_item_type = _is_single_item_product(title, variant)
+        
+        # If it's an accessory, handle it separately (no sizes)
+        if single_item_type == "accessory":
+            # Find which accessory it is
+            text = f"{title or ''} {variant or ''}".lower()
+            found_accessory = None
+            for acc in ACCESSORY_KEYWORDS:
+                if re.search(rf"\b{re.escape(acc)}\b", text, re.I):
+                    if not re.search(rf"\b(no|without)\s+{re.escape(acc)}\b", text, re.I):
+                        found_accessory = acc.capitalize()
+                        break
+            
+            # Also check properties for accessories
+            prop_accessories = _find_accessories(prop_text)
+            
+            entries = []
+            if found_accessory:
+                entries.append((f"Accessory: {found_accessory}", None, qty))
+            for acc in prop_accessories:
+                entries.append((f"Accessory: {acc}", None, 1))
+            
+            # If no accessory found but detected as accessory, create generic entry
+            if not entries and single_item_type == "accessory":
+                # Try to extract accessory name from title
+                title_str = str(title).lower() if pd.notna(title) else ""
+                for acc in ACCESSORY_KEYWORDS:
+                    if acc in title_str:
+                        entries.append((f"Accessory: {acc.capitalize()}", None, qty))
+                        break
+            
+            # Skip size detection for accessories - they have no sizes
+            for comp, size, q in entries:
+                rows.append({
+                    "Date": created_dt,
+                    "Order#": order,
+                    "Product": str(title).strip() if pd.notna(title) else None,
+                    "Component": comp,
+                    "Size": None,  # Accessories have no size
+                    "Qty": q,
+                    "SKU": sku,
+                    "Notes": None,  # filled later
+                    "_FulfillmentStatus": fulfill,
+                })
+            continue  # Skip to next row
+        
+        # For non-accessories, proceed with size detection
         # Try sizes from variant/title, else from properties
         t_guess, b_guess = _extract_two_sizes_from_variant_or_title(variant, title)
         top_prop = _find_top_size(prop_text)
@@ -287,13 +372,32 @@ def _normalize_components(df, cols) -> pd.DataFrame:
             top_size = top_prop
             bottom_size = bottom_prop
 
-        # If looks like a Set and still missing sizes, fallback to a single token
-        title_str = str(title) if pd.notna(title) else ""
-        if (not top_size and not bottom_size) and ("set" in title_str.lower()):
-            vt_size = _extract_from_variant_or_title(variant, title)
-            if vt_size:
-                top_size = vt_size
-                bottom_size = vt_size
+        # If single item detected, only assign size to the appropriate component
+        if single_item_type == "top":
+            # Top-only item: only create Top entry, ignore bottom
+            if not top_size:
+                # Extract single size if available
+                single_size = _extract_from_variant_or_title(variant, title)
+                if single_size:
+                    top_size = single_size
+            bottom_size = None  # Clear bottom size for top-only items
+        elif single_item_type == "bottom":
+            # Bottom-only item: only create Bottom entry, ignore top
+            if not bottom_size:
+                # Extract single size if available
+                single_size = _extract_from_variant_or_title(variant, title)
+                if single_size:
+                    bottom_size = single_size
+            top_size = None  # Clear top size for bottom-only items
+        else:
+            # Set or unknown: use both sizes if available
+            # If looks like a Set and still missing sizes, fallback to a single token
+            title_str = str(title) if pd.notna(title) else ""
+            if (not top_size and not bottom_size) and ("set" in title_str.lower()):
+                vt_size = _extract_from_variant_or_title(variant, title)
+                if vt_size:
+                    top_size = vt_size
+                    bottom_size = vt_size
 
         accessories = _find_accessories(prop_text)
 
@@ -554,16 +658,15 @@ def write_excel_with_formulas_to_buffer(secA: pd.DataFrame, size_cols: List[str]
 # ========= UI ============
 # =========================
 
-# Page config MUST be first Streamlit command
 st.set_page_config(
     page_title="Cut Packet Generator", 
     page_icon="✂️", 
     layout="wide",
-    initial_sidebar_state="collapsed"  # Collapsed on mobile for better rendering
+    initial_sidebar_state="expanded"
 )
 
-st.title("✂️ Cut Packet Generator")
-st.caption("Upload Shopify CSV → select Base Product(s) → optional filters → download Excel")
+st.title("✂️ Cut Packet Generator (Streamlit)")
+st.caption("Upload Shopify CSV → select Base Product(s) (dropdown shows count, most active first) → optional filters → download Excel. Section B uses SUMIFS so totals auto-update.")
 
 with st.sidebar:
     st.header("Filters")
@@ -580,12 +683,12 @@ with st.sidebar:
 
 uploaded = st.file_uploader("Upload Shopify Orders CSV", type=["csv"])
 
-# Date range - stack on mobile, side-by-side on desktop
-c1, c2 = st.columns([1, 1])
+# Date range
+c1, c2 = st.columns(2)
 with c1:
-    start = st.date_input("Start date (optional)", value=None, key="start_date")
+    start = st.date_input("Start date (optional)", value=None)
 with c2:
-    end = st.date_input("End date (optional)", value=None, key="end_date")
+    end = st.date_input("End date (optional)", value=None)
 
 # Advanced size controls
 with st.expander("Advanced size controls (optional)", expanded=False):
