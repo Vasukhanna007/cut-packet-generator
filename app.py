@@ -554,6 +554,7 @@ def write_excel_with_formulas_to_buffer(secA: pd.DataFrame, size_cols: List[str]
 # ========= UI ============
 # =========================
 
+# Page config MUST be first Streamlit command
 st.set_page_config(
     page_title="Cut Packet Generator", 
     page_icon="✂️", 
