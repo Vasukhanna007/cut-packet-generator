@@ -181,10 +181,25 @@ def _find_accessories(text):
     return out
 
 def _extract_from_variant_or_title(variant, title):
+    """Extract a single size from variant or title, prioritizing size after ' - '."""
     text = f"{variant or ''} {title or ''}"
-    for s in ALPHA_ORDER:
-        if re.search(rf"\b{s}\b", text, re.I):
+    
+    # First, try to extract size after " - " (most common pattern like "Product - M")
+    dash_size_match = re.search(r"-\s*(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|FREE SIZE|[2-5]\d)\b", text, re.I)
+    if dash_size_match:
+        size = dash_size_match.group(1).upper()
+        # Validate it's a real size
+        if size in ALPHA_ORDER or re.fullmatch(r"[2-5]\d", size):
+            return size
+    
+    # Fallback: search through ALPHA_ORDER (but prefer longer matches first to avoid "S" matching in "XS")
+    # Sort by length descending to match "XXXS" before "XS" before "S"
+    sorted_sizes = sorted(ALPHA_ORDER, key=len, reverse=True)
+    for s in sorted_sizes:
+        if re.search(rf"\b{re.escape(s)}\b", text, re.I):
             return s
+    
+    # Try numeric sizes
     m = re.search(r"\b([2-5]\d)\b", text)
     if m: return m.group(1)
     return None
@@ -231,11 +246,19 @@ def _extract_two_sizes_from_variant_or_title(variant, title):
     def _tok2(txt):
         if not txt: return (None, None)
         T = str(txt).upper()
+        # First, try to match " - X / Y" pattern (two sizes)
         m = re.search(
             r"-\s*(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|FREE SIZE|[2-5]\d)\s*/\s*"
             r"(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|FREE SIZE|[2-5]\d)\b", T, flags=re.I
         )
-        if m: return m.group(1), m.group(2)
+        if m: return m.group(1).upper(), m.group(2).upper()
+        
+        # Second, try to match " - X" pattern (single size after dash, most common)
+        dash_single = re.search(r"-\s*(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|FREE SIZE|[2-5]\d)\b", T, flags=re.I)
+        if dash_single:
+            return dash_single.group(1).upper(), None
+        
+        # Last resort: find all sizes in the text (but prioritize those after dash)
         toks = re.findall(r"(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|FREE SIZE|[2-5]\d)", T, flags=re.I)
         toks = [t.upper() for t in toks]
         if len(toks) >= 2: return toks[0], toks[1]
