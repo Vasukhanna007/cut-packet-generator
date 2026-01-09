@@ -128,13 +128,17 @@ def _is_unfulfilled(val):
     """Return True if item is unfulfilled, False if fulfilled."""
     if pd.isna(val) or val is None: return True
     s = str(val).strip().lower()
+    
     # If explicitly "fulfilled", it's NOT unfulfilled (should be filtered out)
     if s == "fulfilled":
         return False
+    
     # Check for partial fulfillment - if it contains "fulfilled" but not "unfulfilled", it's fulfilled
-    if "fulfilled" in s and "unfulfilled" not in s:
+    if "fulfilled" in s and "unfulfilled" not in s and "not fulfilled" not in s:
         return False
-    # Otherwise, check for unfulfilled indicators
+    
+    # Check for unfulfilled indicators
+    # Return True if it's unfulfilled/pending/empty
     return (s == "") or ("unfulfilled" in s) or ("pending" in s) or ("not fulfilled" in s)
 
 def _is_unfulfilled_series(series):
@@ -731,7 +735,7 @@ st.set_page_config(
 )
 
 st.title("✂️ Cut Packet Generator (Streamlit)")
-st.caption("Upload Shopify CSV → select Base Product(s) (dropdown shows count, most active first) → optional filters → download Excel. Section B uses SUMIFS so totals auto-update.")
+st.caption("Upload Shopify CSV → select Base Product(s) (dropdown shows unfulfilled count, last 3 months) → optional filters → download Excel. Section B uses SUMIFS so totals auto-update.")
 
 with st.sidebar:
     st.header("Filters")
@@ -786,10 +790,61 @@ if uploaded:
         if not title_col0:
             st.error("Could not find a product title/lineitem name column in your CSV.")
         else:
-            # Build counts per BaseProduct from raw titles
-            titles = df0[title_col0].dropna().astype(str).str.strip()
-            base_series = titles.map(extract_base_product)
-            counts = base_series.value_counts().to_dict()
+            # Build counts per BaseProduct from filtered data (unfulfilled, last 3 months)
+            # Apply same filters as the main processing
+            df_filtered = df0.copy()
+            cols0 = _detect_columns(df_filtered)
+            
+            # Build order date map for date filtering
+            order_col0 = cols0.get("order")
+            order_date_map_temp = _build_order_date_map(df_filtered, order_col0) if order_col0 else None
+            
+            # Normalize to get fulfillment status and dates
+            norm_temp = _normalize_components(df_filtered, cols0)
+            
+            # Attach dates from order-level map
+            raw_dates = pd.to_datetime(norm_temp.get("Date"), errors="coerce", utc=True)
+            norm_temp["_DateLocal"] = raw_dates.dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+            
+            if order_date_map_temp is not None and not order_date_map_temp.empty and "Order#" in norm_temp.columns:
+                idx = norm_temp["Order#"].astype(str)
+                fill_vals = order_date_map_temp.reindex(idx).values
+                missing = norm_temp["_DateLocal"].isna()
+                norm_temp.loc[missing, "_DateLocal"] = fill_vals[missing]
+            
+            # Apply date filters (last 3 months by default)
+            if last_3m:
+                now_ist_naive = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None)
+                cutoff_default = now_ist_naive - pd.Timedelta(days=90)
+                date_local = norm_temp.get("_DateLocal", pd.Series())
+                if not date_local.empty:
+                    keep_mask = date_local.isna() | (date_local >= cutoff_default)
+                    norm_temp = norm_temp[keep_mask].copy()
+            
+            # Apply unfulfilled filter
+            if only_unfulfilled and "_FulfillmentStatus" in norm_temp.columns:
+                unfulfilled_mask = _is_unfulfilled_series(norm_temp["_FulfillmentStatus"])
+                norm_temp = norm_temp[unfulfilled_mask].copy()
+            
+            # Exclude cancelled orders
+            if exclude_cancel and cols0.get("notes") and cols0.get("order") and cols0["notes"] in df_filtered.columns:
+                cancelled_ids = set(
+                    df_filtered[df_filtered[cols0["notes"]].astype(str).str.contains("cancel", case=False, na=False)][cols0["order"]]
+                    .astype(str).tolist()
+                )
+                if cancelled_ids and "Order#" in norm_temp.columns:
+                    norm_temp = norm_temp[~norm_temp["Order#"].astype(str).isin(cancelled_ids)].copy()
+            
+            # Count by BaseProduct from filtered data
+            if not norm_temp.empty and "Product" in norm_temp.columns:
+                titles_filtered = norm_temp["Product"].dropna().astype(str).str.strip()
+                base_series = titles_filtered.map(extract_base_product)
+                counts = base_series.value_counts().to_dict()
+            else:
+                # Fallback to all titles if filtering results in empty
+                titles = df0[title_col0].dropna().astype(str).str.strip()
+                base_series = titles.map(extract_base_product)
+                counts = base_series.value_counts().to_dict()
 
             # Sort by count desc, then name asc
             bases_sorted = sorted(counts.keys(), key=lambda b: (-counts[b], b.lower()))
@@ -802,7 +857,7 @@ if uploaded:
                 help_text = "Optional: Leave empty to include all products when age filter is active"
             
             picked_labels = st.multiselect(
-                "Select Base Product(s) — most active shown first",
+                "Select Base Product(s) — unfulfilled orders (last 3 months)",
                 options=[label_for_base[b] for b in bases_sorted],
                 help=help_text
             )
