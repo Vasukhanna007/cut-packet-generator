@@ -592,16 +592,16 @@ def generate_cut_packet_generic_df(
     # BaseProduct
     norm["BaseProduct"] = norm["Product"].astype(str).map(extract_base_product)
 
-    # Filter by selected base products (skip if empty and using age filter)
+    # Filter by selected base products (skip if empty and using age filter or order search)
     base_set = set([bp.strip() for bp in base_products if bp and bp.strip() != ""])
     if len(base_set) > 0:
         sub = norm[norm["BaseProduct"].isin(base_set)].copy()
     else:
-        # If no base products selected and age filter is active, include all products
-        if min_age_days is not None and min_age_days > 0:
+        # If no base products selected and age filter or order search is active, include all products
+        if (min_age_days is not None and min_age_days > 0) or (order_number_search and order_number_search.strip()):
             sub = norm.copy()
         else:
-            # No base products and no age filter - return empty
+            # No base products and no age filter/order search - return empty
             sub = norm.iloc[0:0].copy()
 
     matched_titles = sorted(sub["Product"].dropna().astype(str).unique().tolist())
@@ -864,10 +864,16 @@ if uploaded:
             label_for_base = {b: f"{b} ({counts.get(b, 0)})" for b in bases_sorted}
             base_for_label = {v: k for k, v in label_for_base.items()}
 
-            # Show hint if age filter is enabled
+            # Show hint if age filter or order search is enabled
             help_text = None
-            if use_min_age and min_age_days:
-                help_text = "Optional: Leave empty to include all products when age filter is active"
+            has_order_search = order_search and order_search.strip()
+            if (use_min_age and min_age_days) or has_order_search:
+                if use_min_age and min_age_days and has_order_search:
+                    help_text = "Optional: Leave empty to include all products when age filter or order search is active"
+                elif use_min_age and min_age_days:
+                    help_text = "Optional: Leave empty to include all products when age filter is active"
+                elif has_order_search:
+                    help_text = "Optional: Leave empty to include all products when order search is active"
             
             picked_labels = st.multiselect(
                 "Select Base Product(s) — unfulfilled orders (last 3 months)",
@@ -878,8 +884,9 @@ if uploaded:
     except Exception as e:
         st.error(f"Failed to read CSV: {e}")
 
-# Enable button if base products selected OR if age filter is enabled
-button_disabled = len(picked_bases) == 0 and not (use_min_age and min_age_days)
+# Enable button if base products selected OR if age filter is enabled OR if order search is active
+has_order_search = order_search and order_search.strip()
+button_disabled = len(picked_bases) == 0 and not (use_min_age and min_age_days) and not has_order_search
 
 if uploaded and st.button("Generate Excel", type="primary", disabled=button_disabled):
     with st.spinner("Processing…"):
@@ -899,7 +906,9 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
             )
 
             if len(matched_titles) == 0:
-                if len(picked_bases) == 0:
+                if has_order_search:
+                    st.warning(f"No orders found matching order number search: '{order_search}'")
+                elif len(picked_bases) == 0:
                     st.warning("No orders matched the age filter criteria.")
                 else:
                     st.warning("No lines matched those Base Product(s) with current filters.")
