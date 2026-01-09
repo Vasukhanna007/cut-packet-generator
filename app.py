@@ -866,13 +866,12 @@ if uploaded:
 
             # Show hint if age filter or order search is enabled
             help_text = None
-            has_order_search = order_search and order_search.strip()
-            if (use_min_age and min_age_days) or has_order_search:
-                if use_min_age and min_age_days and has_order_search:
+            if (use_min_age and min_age_days) or (order_search and order_search.strip()):
+                if use_min_age and min_age_days and (order_search and order_search.strip()):
                     help_text = "Optional: Leave empty to include all products when age filter or order search is active"
                 elif use_min_age and min_age_days:
                     help_text = "Optional: Leave empty to include all products when age filter is active"
-                elif has_order_search:
+                elif order_search and order_search.strip():
                     help_text = "Optional: Leave empty to include all products when order search is active"
             
             picked_labels = st.multiselect(
