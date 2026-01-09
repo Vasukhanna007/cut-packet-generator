@@ -509,7 +509,8 @@ def generate_cut_packet_generic_df(
     last_3_months_default: bool = True,
     filter_sizes_in_sectionA: List[str] | None = None,
     size_cols_override_for_sectionB: List[str] | None = None,
-    min_age_days: int | None = None
+    min_age_days: int | None = None,
+    order_number_search: str | None = None
 ) -> Tuple[pd.DataFrame, List[str], List[str], list]:
 
     df = df_in.copy()
@@ -579,6 +580,14 @@ def generate_cut_packet_generic_df(
         # Keep orders that are older than min_age_days (date < cutoff)
         keep_mask = date_local.isna() | (date_local < min_age_cutoff)
         norm = norm[keep_mask].copy()
+    
+    # Order number search filter
+    if order_number_search and order_number_search.strip() and "Order#" in norm.columns:
+        search_term = order_number_search.strip()
+        # Remove # if present, search is case-insensitive
+        search_term = search_term.lstrip('#')
+        # Filter orders that contain the search term
+        norm = norm[norm["Order#"].astype(str).str.contains(search_term, case=False, na=False)].copy()
 
     # BaseProduct
     norm["BaseProduct"] = norm["Product"].astype(str).map(extract_base_product)
@@ -749,6 +758,10 @@ with st.sidebar:
     min_age_days = None
     if use_min_age:
         min_age_days = st.number_input("Minimum age (days)", min_value=1, max_value=365, value=15, step=1)
+    
+    st.markdown("---")
+    st.markdown("**Search Orders**")
+    order_search = st.text_input("Search by Order Number (optional)", value="", placeholder="e.g., 56718 or #56718", help="Enter order number to filter results. Leave empty to show all orders.")
 
 uploaded = st.file_uploader("Upload Shopify Orders CSV", type=["csv"])
 
@@ -881,7 +894,8 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                 last_3_months_default=last_3m,
                 filter_sizes_in_sectionA=(secA_size_filter if len(secA_size_filter)>0 else None),
                 size_cols_override_for_sectionB=sectionB_size_cols_override,
-                min_age_days=min_age_days
+                min_age_days=min_age_days,
+                order_number_search=order_search if order_search and order_search.strip() else None
             )
 
             if len(matched_titles) == 0:
