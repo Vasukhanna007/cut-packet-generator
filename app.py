@@ -5,12 +5,15 @@
 # - Section B totals use SUMIFS over SectionA table (live formulas)
 
 import re
+import json
+import base64
 from io import BytesIO
 from datetime import datetime, date
 from typing import List, Tuple
 import pandas as pd
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 
 # =========================
 # ====== Core Settings ====
@@ -634,6 +637,161 @@ def generate_cut_packet_generic_df(
     return secA, size_cols, accessories, matched_titles
 
 # =========================
+# ===== Print Helper =====
+# =========================
+
+def generate_print_html(secA: pd.DataFrame, size_cols: List[str], accessories: List[str], 
+                        product_label: str, total_rows: int) -> str:
+    """Generate HTML content for printing Section A and Section B totals."""
+    # Convert Section A DataFrame to HTML table
+    secA_clean = secA.fillna('')
+    table_a_html = secA_clean.to_html(index=False, escape=False, classes='print-table', table_id='printTableA')
+    
+    # Calculate Section B totals from Section A (like Excel SUMIFS)
+    # TOPS totals by size
+    tops_totals = {}
+    if not secA.empty and "Component" in secA.columns and "Size" in secA.columns and "Qty" in secA.columns:
+        tops = secA[(secA["Component"].astype(str) == "Top") & secA["Size"].notna()]
+        for size in size_cols:
+            size_str = str(size)
+            matching = tops[tops["Size"].astype(str) == size_str]
+            count = matching["Qty"].sum()
+            tops_totals[size_str] = int(count) if pd.notna(count) and count > 0 else 0
+    
+    # BOTTOMS totals by size
+    bottoms_totals = {}
+    if not secA.empty and "Component" in secA.columns and "Size" in secA.columns and "Qty" in secA.columns:
+        bottoms = secA[(secA["Component"].astype(str) == "Bottom") & secA["Size"].notna()]
+        for size in size_cols:
+            size_str = str(size)
+            matching = bottoms[bottoms["Size"].astype(str) == size_str]
+            count = matching["Qty"].sum()
+            bottoms_totals[size_str] = int(count) if pd.notna(count) and count > 0 else 0
+    
+    # ACCESSORIES totals by type
+    accessories_totals = {}
+    if not secA.empty and "Component" in secA.columns and "Qty" in secA.columns:
+        for acc in accessories:
+            acc_rows = secA[secA["Component"].astype(str).str.contains(f"Accessory: {acc}", case=False, na=False)]
+            count = acc_rows["Qty"].sum()
+            accessories_totals[acc] = int(count) if pd.notna(count) else 0
+    
+    # Build Section B HTML table
+    sec_b_html = '<h2>Section B - Totals</h2>'
+    
+    if size_cols:
+        sec_b_html += '<table class="print-table" id="printTableB">'
+        # Header row with sizes
+        sec_b_html += '<thead><tr><th>Component</th>'
+        for size in size_cols:
+            sec_b_html += f'<th>{size}</th>'
+        sec_b_html += '</tr></thead><tbody>'
+        
+        # TOPS row
+        sec_b_html += '<tr><td><strong>TOPS</strong></td>'
+        for size in size_cols:
+            size_str = str(size)
+            qty = tops_totals.get(size_str, 0)
+            sec_b_html += f'<td>{qty}</td>'
+        sec_b_html += '</tr>'
+        
+        # BOTTOMS row
+        sec_b_html += '<tr><td><strong>BOTTOMS</strong></td>'
+        for size in size_cols:
+            size_str = str(size)
+            qty = bottoms_totals.get(size_str, 0)
+            sec_b_html += f'<td>{qty}</td>'
+        sec_b_html += '</tr>'
+        
+        sec_b_html += '</tbody></table>'
+    
+    # Accessories section
+    if accessories_totals and any(qty > 0 for qty in accessories_totals.values()):
+        sec_b_html += '<h3 style="margin-top: 30px;">Accessories (count by type)</h3>'
+        sec_b_html += '<table class="print-table" id="printTableAccessories">'
+        sec_b_html += '<thead><tr><th>Accessory</th><th>Count</th></tr></thead><tbody>'
+        for acc, qty in accessories_totals.items():
+            if qty > 0:  # Only show accessories with counts > 0
+                sec_b_html += f'<tr><td>{acc}</td><td>{qty}</td></tr>'
+        sec_b_html += '</tbody></table>'
+    
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Cut Packet Report - Section A & B</title>
+    <style>
+        @media print {{
+            @page {{ margin: 1cm; size: A4 landscape; }}
+            body {{ font-family: Arial, sans-serif; font-size: 9pt; margin: 0; padding: 10px; }}
+            .no-print {{ display: none !important; }}
+            h2 {{ page-break-before: always; margin-top: 30px; }}
+            h2:first-of-type {{ page-break-before: avoid; }}
+        }}
+        body {{ font-family: Arial, sans-serif; padding: 20px; background: white; }}
+        h1 {{ color: #333; border-bottom: 3px solid #4CAF50; padding-bottom: 10px; margin-bottom: 20px; }}
+        h2 {{ color: #4CAF50; border-bottom: 2px solid #4CAF50; padding-bottom: 8px; margin-top: 30px; }}
+        h3 {{ color: #666; margin-top: 20px; }}
+        .info {{ margin: 20px 0; padding: 15px; background: #f5f5f5; border-left: 4px solid #4CAF50; border-radius: 5px; }}
+        .info p {{ margin: 5px 0; }}
+        .print-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            margin-bottom: 20px;
+            font-size: 9pt;
+        }}
+        .print-table th {{
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px;
+            text-align: left;
+            border: 1px solid #ddd;
+            font-weight: bold;
+        }}
+        .print-table td {{
+            padding: 8px;
+            border: 1px solid #ddd;
+        }}
+        .print-table tr:nth-child(even) {{
+            background-color: #f9f9f9;
+        }}
+        .print-button {{
+            width: 100%;
+            padding: 12px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            margin-top: 20px;
+        }}
+        .print-button:hover {{
+            background-color: #45a049;
+        }}
+    </style>
+</head>
+<body>
+    <h1>✂️ Cut Packet Generator - Complete Report</h1>
+    <div class="info">
+        <p><strong>Product(s):</strong> {product_label}</p>
+        <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p><strong>Section A Total Rows:</strong> {total_rows}</p>
+        <p><strong>Filters:</strong> Only unfulfilled; Last 3 months; Cancel excluded</p>
+    </div>
+    
+    <h2>Section A - Orderwise Details</h2>
+    {table_a_html}
+    
+    {sec_b_html}
+    
+    <button class="print-button no-print" onclick="window.print()">🖨️ Print This Page</button>
+</body>
+</html>"""
+    return html_content
+
+# =========================
 # ===== Excel Writing =====
 # =========================
 
@@ -919,26 +1077,91 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                 st.warning("No matching unfulfilled orders (respecting filters/date range).")
             else:
                 st.subheader("Preview — Section A (first 50 rows)")
-                st.dataframe(secA.head(50), use_container_width=True)
+                
+                # Store full secA for printing (not just head)
+                secA_display = secA.head(50)
+                st.dataframe(secA_display, use_container_width=True)
 
                 if len(picked_bases) > 0:
                     product_label = ", ".join(picked_bases[:5]) + (" …" if len(picked_bases) > 5 else "")
                 else:
                     product_label = "All Products (age filter only)"
-                xls = write_excel_with_formulas_to_buffer(
-                    secA=secA,
-                    size_cols=size_cols if size_cols else ALPHA_ORDER,   # fallback so sheet isn't empty
-                    accessories=accessories,
-                    product_label=product_label,
-                    start_date=start,
-                    end_date=end
-                )
-                st.download_button(
-                    label="⬇️ Download Excel",
-                    data=xls,
-                    file_name="cut_packet_OUTPUT.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                
+                # Buttons row: Download Excel and Print
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    xls = write_excel_with_formulas_to_buffer(
+                        secA=secA,
+                        size_cols=size_cols if size_cols else ALPHA_ORDER,   # fallback so sheet isn't empty
+                        accessories=accessories,
+                        product_label=product_label,
+                        start_date=start,
+                        end_date=end
+                    )
+                    st.download_button(
+                        label="⬇️ Download Excel",
+                        data=xls,
+                        file_name="cut_packet_OUTPUT.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                
+                with col2:
+                    # Print button - generate HTML and create interactive print button (includes Section A & B)
+                    print_html_content = generate_print_html(
+                        secA=secA, 
+                        size_cols=size_cols if size_cols else ALPHA_ORDER,
+                        accessories=accessories,
+                        product_label=product_label, 
+                        total_rows=len(secA)
+                    )
+                    
+                    # Use JSON to properly escape the HTML content for JavaScript
+                    html_escaped_js = json.dumps(print_html_content)
+                    
+                    # Create print button using JavaScript with blob URL
+                    # Use .format() instead of f-string to avoid escaping issues
+                    print_button_html = """
+                    <script>
+                    function openPrintWindow_{unique_id}() {{
+                        const htmlContent = {html_content};
+                        const blob = new Blob([htmlContent], {{ type: 'text/html' }});
+                        const url = URL.createObjectURL(blob);
+                        const printWindow = window.open(url, '_blank');
+                        
+                        if (printWindow) {{
+                            printWindow.onload = function() {{
+                                setTimeout(function() {{
+                                    printWindow.print();
+                                }}, 500);
+                            }};
+                        }}
+                    }}
+                    </script>
+                    <div style="width: 100%;">
+                        <button onclick="openPrintWindow_{unique_id}()" 
+                                style="
+                                    width: 100%;
+                                    padding: 12px;
+                                    background-color: #4CAF50;
+                                    color: white;
+                                    border: none;
+                                    border-radius: 5px;
+                                    cursor: pointer;
+                                    font-size: 16px;
+                                    font-weight: bold;
+                                    transition: background-color 0.3s;
+                                "
+                                onmouseover="this.style.backgroundColor='#45a049'" 
+                                onmouseout="this.style.backgroundColor='#4CAF50'">
+                            🖨️ Print Preview
+                        </button>
+                    </div>
+                    """.format(
+                        html_content=html_escaped_js,
+                        unique_id=abs(hash(print_html_content)) % 10000
+                    )
+                    
+                    components.html(print_button_html, height=60)
         except Exception as e:
             st.error(f"Error: {e}")
 else:
