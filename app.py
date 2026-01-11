@@ -897,8 +897,8 @@ def write_excel_with_formulas_to_buffer(secA: pd.DataFrame, size_cols: List[str]
 st.set_page_config(
     page_title="Cut Packet Generator", 
     page_icon="✂️", 
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="centered",
+    initial_sidebar_state="collapsed"
 )
 
 st.title("✂️ Cut Packet Generator (Streamlit)")
@@ -1120,20 +1120,35 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                     
                     # Create print button using JavaScript with blob URL
                     # Use .format() instead of f-string to avoid escaping issues
+                    # Added error handling for mobile compatibility
                     print_button_html = """
                     <script>
                     function openPrintWindow_{unique_id}() {{
-                        const htmlContent = {html_content};
-                        const blob = new Blob([htmlContent], {{ type: 'text/html' }});
-                        const url = URL.createObjectURL(blob);
-                        const printWindow = window.open(url, '_blank');
-                        
-                        if (printWindow) {{
-                            printWindow.onload = function() {{
-                                setTimeout(function() {{
-                                    printWindow.print();
-                                }}, 500);
-                            }};
+                        try {{
+                            const htmlContent = {html_content};
+                            const blob = new Blob([htmlContent], {{ type: 'text/html' }});
+                            const url = URL.createObjectURL(blob);
+                            
+                            // Try to open in same window for mobile compatibility
+                            const printWindow = window.open(url, '_blank');
+                            
+                            if (printWindow) {{
+                                printWindow.onload = function() {{
+                                    setTimeout(function() {{
+                                        try {{
+                                            printWindow.print();
+                                        }} catch(e) {{
+                                            console.log('Print dialog not available');
+                                        }}
+                                    }}, 500);
+                                }};
+                            }} else {{
+                                // Fallback: open in same window if popup blocked
+                                window.location.href = url;
+                            }}
+                        }} catch(e) {{
+                            console.error('Print error:', e);
+                            alert('Print feature not available. Please use browser print (Ctrl+P / Cmd+P)');
                         }}
                     }}
                     </script>
@@ -1149,10 +1164,9 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                                     cursor: pointer;
                                     font-size: 16px;
                                     font-weight: bold;
-                                    transition: background-color 0.3s;
-                                "
-                                onmouseover="this.style.backgroundColor='#45a049'" 
-                                onmouseout="this.style.backgroundColor='#4CAF50'">
+                                    -webkit-tap-highlight-color: transparent;
+                                    touch-action: manipulation;
+                                ">
                             🖨️ Print Preview
                         </button>
                     </div>
