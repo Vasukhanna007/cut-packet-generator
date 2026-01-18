@@ -1093,6 +1093,22 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
             if secA.empty:
                 st.warning("No matching unfulfilled orders (respecting filters/date range).")
             else:
+                # Show active filters summary
+                active_filters = []
+                if only_unfulfilled:
+                    active_filters.append("Unfulfilled only")
+                if exclude_cancel:
+                    active_filters.append("Excluding 'cancel'")
+                if express_only:
+                    active_filters.append("Express only")
+                if last_3m:
+                    active_filters.append("Last 3 months")
+                if use_min_age and min_age_days:
+                    active_filters.append(f"Older than {min_age_days} days")
+                
+                filter_text = ", ".join(active_filters) if active_filters else "None"
+                st.caption(f"Active filters: {filter_text} | Total rows: {len(secA)}")
+                
                 st.subheader("Preview — Section A (first 50 rows)")
                 
                 # Store full secA for printing (not just head)
