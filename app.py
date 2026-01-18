@@ -652,7 +652,7 @@ def generate_cut_packet_generic_df(
 # =========================
 
 def generate_print_html(secA: pd.DataFrame, size_cols: List[str], accessories: List[str], 
-                        product_label: str, total_rows: int) -> str:
+                        product_label: str, total_rows: int, filters_text: str = "") -> str:
     """Generate HTML content for printing Section A and Section B totals."""
     # Convert Section A DataFrame to HTML table
     secA_clean = secA.fillna('')
@@ -727,8 +727,9 @@ def generate_print_html(secA: pd.DataFrame, size_cols: List[str], accessories: L
         sec_b_html += '</tbody></table>'
     
     html_content = f"""<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
     <title>Cut Packet Report - Section A & B</title>
     <style>
         @media print {{
@@ -789,7 +790,7 @@ def generate_print_html(secA: pd.DataFrame, size_cols: List[str], accessories: L
         <p><strong>Product(s):</strong> {product_label}</p>
         <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         <p><strong>Section A Total Rows:</strong> {total_rows}</p>
-        <p><strong>Filters:</strong> Only unfulfilled; Last 3 months; Cancel excluded</p>
+        <p><strong>Filters:</strong> {filters_text if filters_text else "None"}</p>
     </div>
     
     <h2>Section A - Orderwise Details</h2>
@@ -1140,12 +1141,29 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                 
                 with col2:
                     # Print button - generate HTML and create interactive print button (includes Section A & B)
+                    # Build filter text for print preview
+                    print_filters = []
+                    if only_unfulfilled:
+                        print_filters.append("Only unfulfilled")
+                    if exclude_cancel:
+                        print_filters.append("Cancel excluded")
+                    if express_only:
+                        print_filters.append("Express only")
+                    if last_3m:
+                        print_filters.append("Last 3 months")
+                    if use_min_age and min_age_days:
+                        print_filters.append(f"Older than {min_age_days} days")
+                    if order_search and order_search.strip():
+                        print_filters.append(f"Order search: {order_search.strip()}")
+                    print_filters_text = "; ".join(print_filters)
+                    
                     print_html_content = generate_print_html(
                         secA=secA, 
                         size_cols=size_cols if size_cols else ALPHA_ORDER,
                         accessories=accessories,
                         product_label=product_label, 
-                        total_rows=len(secA)
+                        total_rows=len(secA),
+                        filters_text=print_filters_text
                     )
                     
                     # Use JSON to properly escape the HTML content for JavaScript
