@@ -656,6 +656,9 @@ def generate_print_html(secA: pd.DataFrame, size_cols: List[str], accessories: L
     """Generate HTML content for printing Section A and Section B totals."""
     # Convert Section A DataFrame to HTML table
     secA_clean = secA.fillna('')
+    # Replace literal \n with spaces in Notes column for cleaner display
+    if "Notes" in secA_clean.columns:
+        secA_clean["Notes"] = secA_clean["Notes"].astype(str).str.replace(r'\\n', ' ', regex=True).str.replace('\n', ' ')
     table_a_html = secA_clean.to_html(index=False, escape=False, classes='print-table', table_id='printTableA')
     
     # Calculate Section B totals from Section A (like Excel SUMIFS)
