@@ -72,6 +72,7 @@ def _detect_columns(df):
                                              "lineitem fulfillment status", "Fulfillment Status", 
                                              "Fulfillment status", "fulfillment_status"])
     cols["notes"] = _find_col(df, ["Notes","Order Notes","note"])
+    cols["shipping"] = _find_col(df, ["Shipping Method", "shipping_method", "Shipping method"])
     cols["prop_cols"] = [c for c in df.columns if "lineitem properties" in c.lower()]
     return cols
 
@@ -372,6 +373,7 @@ def _normalize_components(df, cols) -> pd.DataFrame:
         qty = r.get(cols["qty"], 1) if cols["qty"] else 1
         created = r.get(cols["date"], None) if cols["date"] else None
         fulfill = r.get(cols["fulfillment"], None) if cols["fulfillment"] else None
+        shipping = r.get(cols["shipping"], None) if cols.get("shipping") else None
 
         try:
             qty = int(qty)
@@ -487,9 +489,10 @@ def _normalize_components(df, cols) -> pd.DataFrame:
                 "SKU": sku,
                 "Notes": None,  # filled later
                 "_FulfillmentStatus": fulfill,
+                "_ShippingMethod": shipping,
             })
 
-    expected = ["Date","Order#","Product","Component","Size","Qty","SKU","Notes","_FulfillmentStatus"]
+    expected = ["Date","Order#","Product","Component","Size","Qty","SKU","Notes","_FulfillmentStatus","_ShippingMethod"]
     if not rows:
         return pd.DataFrame({c: [] for c in expected})
     out = pd.DataFrame(rows)
@@ -513,7 +516,8 @@ def generate_cut_packet_generic_df(
     filter_sizes_in_sectionA: List[str] | None = None,
     size_cols_override_for_sectionB: List[str] | None = None,
     min_age_days: int | None = None,
-    order_number_search: str | None = None
+    order_number_search: str | None = None,
+    express_only: bool = False
 ) -> Tuple[pd.DataFrame, List[str], List[str], list]:
 
     df = df_in.copy()
@@ -592,19 +596,26 @@ def generate_cut_packet_generic_df(
         # Filter orders that contain the search term
         norm = norm[norm["Order#"].astype(str).str.contains(search_term, case=False, na=False)].copy()
 
+    # Express shipping filter - check Shipping Method OR Notes for "express"
+    if express_only:
+        shipping_has_express = norm["_ShippingMethod"].astype(str).str.contains("express", case=False, na=False)
+        notes_has_express = norm["Notes"].astype(str).str.contains("express", case=False, na=False)
+        express_mask = shipping_has_express | notes_has_express
+        norm = norm[express_mask].copy()
+
     # BaseProduct
     norm["BaseProduct"] = norm["Product"].astype(str).map(extract_base_product)
 
-    # Filter by selected base products (skip if empty and using age filter or order search)
+    # Filter by selected base products (skip if empty and using age filter, order search, or express filter)
     base_set = set([bp.strip() for bp in base_products if bp and bp.strip() != ""])
     if len(base_set) > 0:
         sub = norm[norm["BaseProduct"].isin(base_set)].copy()
     else:
-        # If no base products selected and age filter or order search is active, include all products
-        if (min_age_days is not None and min_age_days > 0) or (order_number_search and order_number_search.strip()):
+        # If no base products selected and age filter, order search, or express filter is active, include all products
+        if (min_age_days is not None and min_age_days > 0) or (order_number_search and order_number_search.strip()) or express_only:
             sub = norm.copy()
         else:
-            # No base products and no age filter/order search - return empty
+            # No base products and no special filters - return empty
             sub = norm.iloc[0:0].copy()
 
     matched_titles = sorted(sub["Product"].dropna().astype(str).unique().tolist())
@@ -909,6 +920,7 @@ with st.sidebar:
     only_unfulfilled = st.checkbox("Only unfulfilled", value=True)
     exclude_cancel = st.checkbox("Exclude orders with 'cancel' in Notes", value=True)
     last_3m = st.checkbox("Limit to last 3 months (default)", value=True)
+    express_only = st.checkbox("Express orders only", value=False, help="Filter orders where Shipping Method contains 'Express' or Notes contain 'Express'")
     
     st.markdown("---")
     st.markdown("**Age Filter**")
@@ -1022,15 +1034,19 @@ if uploaded:
             label_for_base = {b: f"{b} ({counts.get(b, 0)})" for b in bases_sorted}
             base_for_label = {v: k for k, v in label_for_base.items()}
 
-            # Show hint if age filter or order search is enabled
+            # Show hint if age filter, order search, or express filter is enabled
             help_text = None
-            if (use_min_age and min_age_days) or (order_search and order_search.strip()):
-                if use_min_age and min_age_days and (order_search and order_search.strip()):
-                    help_text = "Optional: Leave empty to include all products when age filter or order search is active"
-                elif use_min_age and min_age_days:
-                    help_text = "Optional: Leave empty to include all products when age filter is active"
-                elif order_search and order_search.strip():
-                    help_text = "Optional: Leave empty to include all products when order search is active"
+            has_special_filter = (use_min_age and min_age_days) or (order_search and order_search.strip()) or express_only
+            if has_special_filter:
+                active_filters = []
+                if use_min_age and min_age_days:
+                    active_filters.append("age filter")
+                if order_search and order_search.strip():
+                    active_filters.append("order search")
+                if express_only:
+                    active_filters.append("express filter")
+                filter_text = " or ".join(active_filters)
+                help_text = f"Optional: Leave empty to include all products when {filter_text} is active"
             
             picked_labels = st.multiselect(
                 "Select Base Product(s) — unfulfilled orders (last 3 months)",
@@ -1041,9 +1057,9 @@ if uploaded:
     except Exception as e:
         st.error(f"Failed to read CSV: {e}")
 
-# Enable button if base products selected OR if age filter is enabled OR if order search is active
+# Enable button if base products selected OR if age filter is enabled OR if order search is active OR if express filter is active
 has_order_search = order_search and order_search.strip()
-button_disabled = len(picked_bases) == 0 and not (use_min_age and min_age_days) and not has_order_search
+button_disabled = len(picked_bases) == 0 and not (use_min_age and min_age_days) and not has_order_search and not express_only
 
 if uploaded and st.button("Generate Excel", type="primary", disabled=button_disabled):
     with st.spinner("Processing…"):
@@ -1059,7 +1075,8 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                 filter_sizes_in_sectionA=(secA_size_filter if len(secA_size_filter)>0 else None),
                 size_cols_override_for_sectionB=sectionB_size_cols_override,
                 min_age_days=min_age_days,
-                order_number_search=order_search if order_search and order_search.strip() else None
+                order_number_search=order_search if order_search and order_search.strip() else None,
+                express_only=express_only
             )
 
             if len(matched_titles) == 0:
