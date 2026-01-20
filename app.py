@@ -517,7 +517,8 @@ def generate_cut_packet_generic_df(
     size_cols_override_for_sectionB: List[str] | None = None,
     min_age_days: int | None = None,
     order_number_search: str | None = None,
-    express_only: bool = False
+    express_only: bool = False,
+    mens_collection_only: bool = False
 ) -> Tuple[pd.DataFrame, List[str], List[str], list]:
 
     df = df_in.copy()
@@ -603,16 +604,24 @@ def generate_cut_packet_generic_df(
         express_mask = shipping_has_express | notes_has_express
         norm = norm[express_mask].copy()
 
+    # Men's collection filter - filter products containing both "kurta" and "pant"
+    if mens_collection_only:
+        product_text = norm["Product"].astype(str).str.lower()
+        has_kurta = product_text.str.contains("kurta", case=False, na=False)
+        has_pant = product_text.str.contains("pant", case=False, na=False)
+        mens_mask = has_kurta & has_pant
+        norm = norm[mens_mask].copy()
+
     # BaseProduct
     norm["BaseProduct"] = norm["Product"].astype(str).map(extract_base_product)
 
-    # Filter by selected base products (skip if empty and using age filter, order search, or express filter)
+    # Filter by selected base products (skip if empty and using age filter, order search, express filter, or men's collection filter)
     base_set = set([bp.strip() for bp in base_products if bp and bp.strip() != ""])
     if len(base_set) > 0:
         sub = norm[norm["BaseProduct"].isin(base_set)].copy()
     else:
-        # If no base products selected and age filter, order search, or express filter is active, include all products
-        if (min_age_days is not None and min_age_days > 0) or (order_number_search and order_number_search.strip()) or express_only:
+        # If no base products selected and age filter, order search, express filter, or men's collection filter is active, include all products
+        if (min_age_days is not None and min_age_days > 0) or (order_number_search and order_number_search.strip()) or express_only or mens_collection_only:
             sub = norm.copy()
         else:
             # No base products and no special filters - return empty
@@ -925,6 +934,7 @@ with st.sidebar:
     exclude_cancel = st.checkbox("Exclude orders with 'cancel' in Notes", value=True)
     last_3m = st.checkbox("Limit to last 3 months (default)", value=True)
     express_only = st.checkbox("Express orders only", value=False, help="Filter orders where Shipping Method contains 'Express' or Notes contain 'Express'")
+    mens_collection_only = st.checkbox("Men's collection (Kurta Pant) only", value=False, help="Filter products containing 'kurta' and 'pant' (men's collection)")
     
     st.markdown("---")
     st.markdown("**Age Filter**")
@@ -1038,9 +1048,9 @@ if uploaded:
             label_for_base = {b: f"{b} ({counts.get(b, 0)})" for b in bases_sorted}
             base_for_label = {v: k for k, v in label_for_base.items()}
 
-            # Show hint if age filter, order search, or express filter is enabled
+            # Show hint if age filter, order search, express filter, or men's collection filter is enabled
             help_text = None
-            has_special_filter = (use_min_age and min_age_days) or (order_search and order_search.strip()) or express_only
+            has_special_filter = (use_min_age and min_age_days) or (order_search and order_search.strip()) or express_only or mens_collection_only
             if has_special_filter:
                 active_filters = []
                 if use_min_age and min_age_days:
@@ -1049,6 +1059,8 @@ if uploaded:
                     active_filters.append("order search")
                 if express_only:
                     active_filters.append("express filter")
+                if mens_collection_only:
+                    active_filters.append("men's collection filter")
                 filter_text = " or ".join(active_filters)
                 help_text = f"Optional: Leave empty to include all products when {filter_text} is active"
             
@@ -1061,9 +1073,9 @@ if uploaded:
     except Exception as e:
         st.error(f"Failed to read CSV: {e}")
 
-# Enable button if base products selected OR if age filter is enabled OR if order search is active OR if express filter is active
+# Enable button if base products selected OR if age filter is enabled OR if order search is active OR if express filter is active OR if men's collection filter is active
 has_order_search = order_search and order_search.strip()
-button_disabled = len(picked_bases) == 0 and not (use_min_age and min_age_days) and not has_order_search and not express_only
+button_disabled = len(picked_bases) == 0 and not (use_min_age and min_age_days) and not has_order_search and not express_only and not mens_collection_only
 
 if uploaded and st.button("Generate Excel", type="primary", disabled=button_disabled):
     with st.spinner("Processing…"):
@@ -1080,7 +1092,8 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                 size_cols_override_for_sectionB=sectionB_size_cols_override,
                 min_age_days=min_age_days,
                 order_number_search=order_search if order_search and order_search.strip() else None,
-                express_only=express_only
+                express_only=express_only,
+                mens_collection_only=mens_collection_only
             )
 
             if len(matched_titles) == 0:
@@ -1105,6 +1118,8 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                     active_filters.append("Excluding 'cancel'")
                 if express_only:
                     active_filters.append("Express only")
+                if mens_collection_only:
+                    active_filters.append("Men's collection only")
                 if last_3m:
                     active_filters.append("Last 3 months")
                 if use_min_age and min_age_days:
@@ -1152,6 +1167,8 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                         print_filters.append("Cancel excluded")
                     if express_only:
                         print_filters.append("Express only")
+                    if mens_collection_only:
+                        print_filters.append("Men's collection only")
                     if last_3m:
                         print_filters.append("Last 3 months")
                     if use_min_age and min_age_days:
