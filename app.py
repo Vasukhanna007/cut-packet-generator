@@ -128,6 +128,14 @@ def _build_order_notes_map(df, order_col: str, notes_col: str | None):
     s = s.replace("", pd.NA).groupby(level=0).first().fillna("")
     return s
 
+_NEGATED_CANCEL_RE = re.compile(r"(?:do\s+not|don'?t|never)\s+(?:\w+\s+){0,2}cancel\w*", re.IGNORECASE)
+
+def _notes_mention_cancel(notes: pd.Series) -> pd.Series:
+    """True where a note mentions cancelling, ignoring negated phrases like
+    'DO NOT CANCEL' / "don't cancel" so those orders are not excluded."""
+    cleaned = notes.astype(str).str.replace(_NEGATED_CANCEL_RE, " ", regex=True)
+    return cleaned.str.contains("cancel", case=False, na=False)
+
 def _is_unfulfilled(val):
     """Return True if item is unfulfilled, False if fulfilled."""
     if pd.isna(val) or val is None: return True
@@ -533,7 +541,7 @@ def generate_cut_packet_generic_df(
     cancelled_ids = set()
     if exclude_cancel and cols.get("notes") and cols.get("order") and cols["notes"] in df.columns:
         cancelled_ids = set(
-            df[df[cols["notes"]].astype(str).str.contains("cancel", case=False, na=False)][cols["order"]]
+            df[_notes_mention_cancel(df[cols["notes"]])][cols["order"]]
             .astype(str).tolist()
         )
 
@@ -598,11 +606,13 @@ def generate_cut_packet_generic_df(
         norm = norm[norm["Order#"].astype(str).str.contains(search_term, case=False, na=False)].copy()
 
     # Express shipping filter - check Shipping Method OR Notes for "express"
+    # Shopify CSVs only fill Shipping Method on the first row of each order,
+    # so match at the order level and keep ALL rows of matching orders
     if express_only:
         shipping_has_express = norm["_ShippingMethod"].astype(str).str.contains("express", case=False, na=False)
         notes_has_express = norm["Notes"].astype(str).str.contains("express", case=False, na=False)
-        express_mask = shipping_has_express | notes_has_express
-        norm = norm[express_mask].copy()
+        express_orders = norm.loc[shipping_has_express | notes_has_express, "Order#"].astype(str).unique()
+        norm = norm[norm["Order#"].astype(str).isin(express_orders)].copy()
 
     # Men's collection filter - filter products containing both "kurta" and "pant"
     if mens_collection_only:
@@ -668,7 +678,9 @@ def generate_print_html(secA: pd.DataFrame, size_cols: List[str], accessories: L
     # Replace literal \n with spaces in Notes column for cleaner display
     if "Notes" in secA_clean.columns:
         secA_clean["Notes"] = secA_clean["Notes"].astype(str).str.replace(r'\\n', ' ', regex=True).str.replace('\n', ' ')
-    table_a_html = secA_clean.to_html(index=False, escape=False, classes='print-table', table_id='printTableA')
+    # max_colwidth=None: never truncate long notes (some pandas versions cut cells at 50 chars)
+    with pd.option_context('display.max_colwidth', None):
+        table_a_html = secA_clean.to_html(index=False, escape=False, classes='print-table', table_id='printTableA')
     
     # Calculate Section B totals from Section A (like Excel SUMIFS)
     # TOPS totals by size
@@ -750,6 +762,9 @@ def generate_print_html(secA: pd.DataFrame, size_cols: List[str], accessories: L
             .no-print {{ display: none !important; }}
             h2 {{ page-break-before: always; margin-top: 30px; }}
             h2:first-of-type {{ page-break-before: avoid; }}
+            /* keep each row whole across page breaks so long notes aren't sliced */
+            .print-table tr {{ page-break-inside: avoid; }}
+            .print-table thead {{ display: table-header-group; }}
         }}
         body {{ font-family: Arial, sans-serif; padding: 20px; background: white; }}
         h1 {{ color: #333; border-bottom: 3px solid #4CAF50; padding-bottom: 10px; margin-bottom: 20px; }}
@@ -775,6 +790,9 @@ def generate_print_html(secA: pd.DataFrame, size_cols: List[str], accessories: L
         .print-table td {{
             padding: 8px;
             border: 1px solid #ddd;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            white-space: normal;
         }}
         .print-table tr:nth-child(even) {{
             background-color: #f9f9f9;
@@ -1026,7 +1044,7 @@ if uploaded:
             # Exclude cancelled orders
             if exclude_cancel and cols0.get("notes") and cols0.get("order") and cols0["notes"] in df_filtered.columns:
                 cancelled_ids = set(
-                    df_filtered[df_filtered[cols0["notes"]].astype(str).str.contains("cancel", case=False, na=False)][cols0["order"]]
+                    df_filtered[_notes_mention_cancel(df_filtered[cols0["notes"]])][cols0["order"]]
                     .astype(str).tolist()
                 )
                 if cancelled_ids and "Order#" in norm_temp.columns:
