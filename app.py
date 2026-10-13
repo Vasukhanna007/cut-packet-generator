@@ -371,6 +371,28 @@ def extract_base_product(title: str) -> str:
 # ===== Normalization =====
 # =========================
 
+def _split_size(size) -> List[str]:
+    """Split a Size cell into its parts: "M / L" -> ["M", "L"], "M" -> ["M"]."""
+    return [p.strip() for p in str(size).split("/") if p.strip()]
+
+def _component_size_total(secA: pd.DataFrame, component: str, size: str) -> int:
+    """Qty for one Top/Bottom size, counting single items plus the matching half of each Set."""
+    if secA.empty:
+        return 0
+    idx = 0 if component == "Top" else 1
+    comp = secA["Component"].astype(str)
+    total = 0
+    for c, sz, q in zip(comp, secA["Size"], secA["Qty"]):
+        if pd.isna(sz) or pd.isna(q):
+            continue
+        if c == component and str(sz) == size:
+            total += q
+        elif c == "Set":
+            parts = _split_size(sz)
+            if len(parts) == 2 and parts[idx] == size:
+                total += q
+    return int(total)
+
 def _normalize_components(df, cols) -> pd.DataFrame:
     rows = []
     for _, r in df.iterrows():
@@ -482,8 +504,13 @@ def _normalize_components(df, cols) -> pd.DataFrame:
         accessories = _find_accessories(prop_text)
 
         entries = []
-        if top_size: entries.append(("Top", top_size, qty))
-        if bottom_size: entries.append(("Bottom", bottom_size, qty))
+        # One row per line item: a set shows both sizes as "Top / Bottom" in a single Size cell
+        if top_size and bottom_size:
+            entries.append(("Set", f"{top_size} / {bottom_size}", qty))
+        elif top_size:
+            entries.append(("Top", top_size, qty))
+        elif bottom_size:
+            entries.append(("Bottom", bottom_size, qty))
         for acc in accessories: entries.append((f"Accessory: {acc}", None, 1))
 
         for comp, size, q in entries:
@@ -589,12 +616,12 @@ def generate_cut_packet_generic_df(
         norm = norm[norm["_DateLocal"].isna() | (norm["_DateLocal"] <= ed)]
     
     # Minimum age filter (show only orders older than X days)
-    if min_age_days is not None and min_age_days > 0:
+    if min_age_days is not None:
         now_ist_naive = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None)
         min_age_cutoff = now_ist_naive - pd.Timedelta(days=min_age_days)
         date_local = norm["_DateLocal"]
-        # Keep orders that are older than min_age_days (date < cutoff)
-        keep_mask = date_local.isna() | (date_local < min_age_cutoff)
+        # Keep orders that are at least min_age_days old (0 = include same-day orders)
+        keep_mask = date_local.isna() | (date_local <= min_age_cutoff)
         norm = norm[keep_mask].copy()
     
     # Order number search filter
@@ -605,13 +632,14 @@ def generate_cut_packet_generic_df(
         # Filter orders that contain the search term
         norm = norm[norm["Order#"].astype(str).str.contains(search_term, case=False, na=False)].copy()
 
-    # Express shipping filter - check Shipping Method OR Notes for "express"
+    # Express filter - express Shipping Method OR any order notes count as express
     # Shopify CSVs only fill Shipping Method on the first row of each order,
     # so match at the order level and keep ALL rows of matching orders
     if express_only:
         shipping_has_express = norm["_ShippingMethod"].astype(str).str.contains("express", case=False, na=False)
-        notes_has_express = norm["Notes"].astype(str).str.contains("express", case=False, na=False)
-        express_orders = norm.loc[shipping_has_express | notes_has_express, "Order#"].astype(str).unique()
+        notes_text = norm["Notes"].fillna("").astype(str).str.strip()
+        has_notes = (notes_text != "") & (notes_text.str.lower() != "nan")
+        express_orders = norm.loc[shipping_has_express | has_notes, "Order#"].astype(str).unique()
         norm = norm[norm["Order#"].astype(str).isin(express_orders)].copy()
 
     # Men's collection filter - filter products containing both "kurta" and "pant"
@@ -631,7 +659,7 @@ def generate_cut_packet_generic_df(
         sub = norm[norm["BaseProduct"].isin(base_set)].copy()
     else:
         # If no base products selected and age filter, order search, express filter, or men's collection filter is active, include all products
-        if (min_age_days is not None and min_age_days > 0) or (order_number_search and order_number_search.strip()) or express_only or mens_collection_only:
+        if min_age_days is not None or (order_number_search and order_number_search.strip()) or express_only or mens_collection_only:
             sub = norm.copy()
         else:
             # No base products and no special filters - return empty
@@ -650,13 +678,15 @@ def generate_cut_packet_generic_df(
 
     # Optional size filter inside Section A
     if filter_sizes_in_sectionA and len(filter_sizes_in_sectionA) > 0:
-        secA = secA[secA["Size"].astype(str).isin([str(s) for s in filter_sizes_in_sectionA])].copy()
+        wanted = {str(s) for s in filter_sizes_in_sectionA}
+        size_match = secA["Size"].map(lambda v: pd.notna(v) and any(p in wanted for p in _split_size(v)))
+        secA = secA[size_match].copy()
 
     # Section B size columns
     if size_cols_override_for_sectionB and len(size_cols_override_for_sectionB) > 0:
         size_cols = [str(s) for s in size_cols_override_for_sectionB]
     else:
-        sizes_present = secA["Size"].dropna().astype(str).tolist()
+        sizes_present = [p for v in secA["Size"].dropna() for p in _split_size(v)]
         alpha = [s for s in sizes_present if not re.fullmatch(r"[2-5]\d", str(s))]
         numeric = [int(s) for s in sizes_present if re.fullmatch(r"[2-5]\d", str(s))]
         alpha_sorted = [s for s in ALPHA_ORDER if s in alpha] + [s for s in alpha if s not in ALPHA_ORDER]
@@ -686,22 +716,14 @@ def generate_print_html(secA: pd.DataFrame, size_cols: List[str], accessories: L
     # TOPS totals by size
     tops_totals = {}
     if not secA.empty and "Component" in secA.columns and "Size" in secA.columns and "Qty" in secA.columns:
-        tops = secA[(secA["Component"].astype(str) == "Top") & secA["Size"].notna()]
         for size in size_cols:
-            size_str = str(size)
-            matching = tops[tops["Size"].astype(str) == size_str]
-            count = matching["Qty"].sum()
-            tops_totals[size_str] = int(count) if pd.notna(count) and count > 0 else 0
+            tops_totals[str(size)] = _component_size_total(secA, "Top", str(size))
     
     # BOTTOMS totals by size
     bottoms_totals = {}
     if not secA.empty and "Component" in secA.columns and "Size" in secA.columns and "Qty" in secA.columns:
-        bottoms = secA[(secA["Component"].astype(str) == "Bottom") & secA["Size"].notna()]
         for size in size_cols:
-            size_str = str(size)
-            matching = bottoms[bottoms["Size"].astype(str) == size_str]
-            count = matching["Qty"].sum()
-            bottoms_totals[size_str] = int(count) if pd.notna(count) and count > 0 else 0
+            bottoms_totals[str(size)] = _component_size_total(secA, "Bottom", str(size))
     
     # ACCESSORIES totals by type
     accessories_totals = {}
@@ -891,14 +913,14 @@ def write_excel_with_formulas_to_buffer(secA: pd.DataFrame, size_cols: List[str]
         wsB.write(1, 0, "TOPS", row_lbl_fmt)
         for j in range(1, len(size_cols)+1):
             size_hdr = _xl_rc(0, j)
-            f = f'=SUMIFS(SectionA[Qty],SectionA[Component],"Top",SectionA[Size],{size_hdr})'
+            f = f'=SUMIFS(SectionA[Qty],SectionA[Component],"Top",SectionA[Size],{size_hdr})+SUMIFS(SectionA[Qty],SectionA[Component],"Set",SectionA[Size],{size_hdr}&" / *")'
             wsB.write_formula(1, j, f, cell_int_fmt)
 
         # BOTTOMS
         wsB.write(2, 0, "BOTTOMS", row_lbl_fmt)
         for j in range(1, len(size_cols)+1):
             size_hdr = _xl_rc(0, j)
-            f = f'=SUMIFS(SectionA[Qty],SectionA[Component],"Bottom",SectionA[Size],{size_hdr})'
+            f = f'=SUMIFS(SectionA[Qty],SectionA[Component],"Bottom",SectionA[Size],{size_hdr})+SUMIFS(SectionA[Qty],SectionA[Component],"Set",SectionA[Size],"* / "&{size_hdr})'
             wsB.write_formula(2, j, f, cell_int_fmt)
 
         # Accessories block
@@ -951,7 +973,7 @@ with st.sidebar:
     only_unfulfilled = st.checkbox("Only unfulfilled", value=True)
     exclude_cancel = st.checkbox("Exclude orders with 'cancel' in Notes", value=True)
     last_3m = st.checkbox("Limit to last 3 months (default)", value=True)
-    express_only = st.checkbox("Express orders only", value=False, help="Filter orders where Shipping Method contains 'Express' or Notes contain 'Express'")
+    express_only = st.checkbox("Express orders only", value=False, help="Orders with Express shipping, or any order that has Notes")
     mens_collection_only = st.checkbox("Men's collection (Kurta Pant) only", value=False, help="Filter products containing 'kurta' and 'pant' (men's collection)")
     
     st.markdown("---")
@@ -959,7 +981,7 @@ with st.sidebar:
     use_min_age = st.checkbox("Show only orders older than X days", value=False)
     min_age_days = None
     if use_min_age:
-        min_age_days = st.number_input("Minimum age (days)", min_value=1, max_value=365, value=15, step=1)
+        min_age_days = st.number_input("Minimum age (days)", min_value=0, max_value=365, value=15, step=1, help="0 = include same-day orders")
     
     st.markdown("---")
     st.markdown("**Search Orders**")
@@ -1068,10 +1090,10 @@ if uploaded:
 
             # Show hint if age filter, order search, express filter, or men's collection filter is enabled
             help_text = None
-            has_special_filter = (use_min_age and min_age_days) or (order_search and order_search.strip()) or express_only or mens_collection_only
+            has_special_filter = (use_min_age and min_age_days is not None) or (order_search and order_search.strip()) or express_only or mens_collection_only
             if has_special_filter:
                 active_filters = []
-                if use_min_age and min_age_days:
+                if use_min_age and min_age_days is not None:
                     active_filters.append("age filter")
                 if order_search and order_search.strip():
                     active_filters.append("order search")
@@ -1093,7 +1115,7 @@ if uploaded:
 
 # Enable button if base products selected OR if age filter is enabled OR if order search is active OR if express filter is active OR if men's collection filter is active
 has_order_search = order_search and order_search.strip()
-button_disabled = len(picked_bases) == 0 and not (use_min_age and min_age_days) and not has_order_search and not express_only and not mens_collection_only
+button_disabled = len(picked_bases) == 0 and not (use_min_age and min_age_days is not None) and not has_order_search and not express_only and not mens_collection_only
 
 if uploaded and st.button("Generate Excel", type="primary", disabled=button_disabled):
     with st.spinner("Processing…"):
@@ -1140,7 +1162,7 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                     active_filters.append("Men's collection only")
                 if last_3m:
                     active_filters.append("Last 3 months")
-                if use_min_age and min_age_days:
+                if use_min_age and min_age_days is not None:
                     active_filters.append(f"Older than {min_age_days} days")
                 
                 filter_text = ", ".join(active_filters) if active_filters else "None"
@@ -1189,7 +1211,7 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                         print_filters.append("Men's collection only")
                     if last_3m:
                         print_filters.append("Last 3 months")
-                    if use_min_age and min_age_days:
+                    if use_min_age and min_age_days is not None:
                         print_filters.append(f"Older than {min_age_days} days")
                     if order_search and order_search.strip():
                         print_filters.append(f"Order search: {order_search.strip()}")
