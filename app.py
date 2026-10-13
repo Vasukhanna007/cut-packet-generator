@@ -5,6 +5,7 @@
 # - Section B totals use SUMIFS over SectionA table (live formulas)
 
 import re
+import difflib
 import json
 import base64
 from io import BytesIO
@@ -371,6 +372,34 @@ def extract_base_product(title: str) -> str:
 # ===== Normalization =====
 # =========================
 
+# Words that mark an order as express in Notes; misspellings are caught by fuzzy matching
+EXPRESS_NOTE_WORDS = ["express", "urgent", "asap", "date"]
+# Deadline phrases in Notes ("need by 18", "before 22", "23rd oct", "within 10 days", ...)
+EXPRESS_NOTE_PATTERNS = [
+    r"\b(need(ed)?|want(ed)?|required)\s+(it\s+)?(by|before)\b",
+    r"\b(before|by|upto|up\s+to|till|until)\s+\d{1,2}",
+    r"\bbefore\b",
+    r"\b\d{1,2}\s*(st|nd|rd|th|t)\b(?!\s*floor)",
+    r"\bwithin\s+\d+\s*days?\b",
+    r"\bdispatch(ed)?\s+(on|by|before)\b",
+]
+
+def _notes_is_express(text) -> bool:
+    """True if a note asks for express/urgent handling or mentions a deadline date."""
+    if not isinstance(text, str) or not text.strip():
+        return False
+    t = text.lower()
+    if any(re.search(p, t) for p in EXPRESS_NOTE_PATTERNS):
+        return True
+    for word in re.findall(r"[a-z]+", t):
+        for target in EXPRESS_NOTE_WORDS:
+            if word == target or word.startswith(target):
+                return True
+            # fuzzy match only for longer words so short words like "data"/"late" don't count
+            if len(target) >= 5 and len(word) >= 4 and difflib.SequenceMatcher(None, word, target).ratio() >= 0.8:
+                return True
+    return False
+
 def _split_size(size) -> List[str]:
     """Split a Size cell into its parts: "M / L" -> ["M", "L"], "M" -> ["M"]."""
     return [p.strip() for p in str(size).split("/") if p.strip()]
@@ -632,12 +661,12 @@ def generate_cut_packet_generic_df(
         # Filter orders that contain the search term
         norm = norm[norm["Order#"].astype(str).str.contains(search_term, case=False, na=False)].copy()
 
-    # Express filter - express Shipping Method OR Notes mentioning "express"
+    # Express filter - express Shipping Method OR Notes saying express/urgent or giving a deadline date
     # Shopify CSVs only fill Shipping Method on the first row of each order,
     # so match at the order level and keep ALL rows of matching orders
     if express_only:
         shipping_has_express = norm["_ShippingMethod"].astype(str).str.contains("express", case=False, na=False)
-        notes_has_express = norm["Notes"].astype(str).str.contains("express", case=False, na=False)
+        notes_has_express = norm["Notes"].map(_notes_is_express)
         express_orders = norm.loc[shipping_has_express | notes_has_express, "Order#"].astype(str).unique()
         norm = norm[norm["Order#"].astype(str).isin(express_orders)].copy()
 
@@ -974,7 +1003,7 @@ with st.sidebar:
     only_unfulfilled = st.checkbox("Only unfulfilled", value=True)
     exclude_cancel = st.checkbox("Exclude orders with 'cancel' in Notes", value=True)
     last_3m = st.checkbox("Limit to last 3 months (default)", value=True)
-    express_only = st.checkbox("Express orders only", value=False, help="Orders with Express shipping, or whose Notes mention 'Express'")
+    express_only = st.checkbox("Express orders only", value=False, help="Orders with Express shipping, or whose Notes say express/urgent (any spelling) or give a deadline date")
     mens_collection_only = st.checkbox("Men's collection (Kurta Pant) only", value=False, help="Filter products containing 'kurta' and 'pant' (men's collection)")
     
     st.markdown("---")
