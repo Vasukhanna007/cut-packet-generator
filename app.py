@@ -704,7 +704,7 @@ def generate_print_html(secA: pd.DataFrame, size_cols: List[str], accessories: L
                         product_label: str, total_rows: int, filters_text: str = "") -> str:
     """Generate HTML content for printing Section A and Section B totals."""
     # Convert Section A DataFrame to HTML table
-    secA_clean = secA.fillna('')
+    secA_clean = secA.drop(columns=["Component"], errors="ignore").fillna('')
     # Replace literal \n with spaces in Notes column for cleaner display
     if "Notes" in secA_clean.columns:
         secA_clean["Notes"] = secA_clean["Notes"].astype(str).str.replace(r'\\n', ' ', regex=True).str.replace('\n', ' ')
@@ -888,6 +888,8 @@ def write_excel_with_formulas_to_buffer(secA: pd.DataFrame, size_cols: List[str]
         widths = {"A":12,"B":16,"C":44,"D":12,"E":10,"F":8,"G":18,"H":36}
         for col_letter, w in widths.items():
             wsA.set_column(f"{col_letter}:{col_letter}", w)
+        # Component (Set/Top/Bottom) stays in the table for the SUMIFS totals but is hidden
+        wsA.set_column("D:D", 12, None, {"hidden": True})
 
         nrows, ncols = secA.shape
         table_range = f"A1:{chr(ord('A')+ncols-1)}{nrows+1}"
@@ -1171,7 +1173,7 @@ if uploaded and st.button("Generate Excel", type="primary", disabled=button_disa
                 st.subheader("Preview — Section A (first 50 rows)")
                 
                 # Store full secA for printing (not just head)
-                secA_display = secA.head(50)
+                secA_display = secA.drop(columns=["Component"], errors="ignore").head(50)
                 st.dataframe(secA_display, use_container_width=True)
 
                 if len(picked_bases) > 0:
