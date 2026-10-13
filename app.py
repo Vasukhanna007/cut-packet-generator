@@ -632,14 +632,13 @@ def generate_cut_packet_generic_df(
         # Filter orders that contain the search term
         norm = norm[norm["Order#"].astype(str).str.contains(search_term, case=False, na=False)].copy()
 
-    # Express filter - express Shipping Method OR any order notes count as express
+    # Express filter - express Shipping Method OR Notes mentioning "express"
     # Shopify CSVs only fill Shipping Method on the first row of each order,
     # so match at the order level and keep ALL rows of matching orders
     if express_only:
         shipping_has_express = norm["_ShippingMethod"].astype(str).str.contains("express", case=False, na=False)
-        notes_text = norm["Notes"].fillna("").astype(str).str.strip()
-        has_notes = (notes_text != "") & (notes_text.str.lower() != "nan")
-        express_orders = norm.loc[shipping_has_express | has_notes, "Order#"].astype(str).unique()
+        notes_has_express = norm["Notes"].astype(str).str.contains("express", case=False, na=False)
+        express_orders = norm.loc[shipping_has_express | notes_has_express, "Order#"].astype(str).unique()
         norm = norm[norm["Order#"].astype(str).isin(express_orders)].copy()
 
     # Men's collection filter - filter products containing both "kurta" and "pant"
@@ -975,7 +974,7 @@ with st.sidebar:
     only_unfulfilled = st.checkbox("Only unfulfilled", value=True)
     exclude_cancel = st.checkbox("Exclude orders with 'cancel' in Notes", value=True)
     last_3m = st.checkbox("Limit to last 3 months (default)", value=True)
-    express_only = st.checkbox("Express orders only", value=False, help="Orders with Express shipping, or any order that has Notes")
+    express_only = st.checkbox("Express orders only", value=False, help="Orders with Express shipping, or whose Notes mention 'Express'")
     mens_collection_only = st.checkbox("Men's collection (Kurta Pant) only", value=False, help="Filter products containing 'kurta' and 'pant' (men's collection)")
     
     st.markdown("---")
