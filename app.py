@@ -607,6 +607,13 @@ def generate_cut_packet_generic_df(
     if order_notes_map is not None and not order_notes_map.empty and "Order#" in norm.columns:
         norm["Notes"] = norm["Order#"].astype(str).map(order_notes_map).fillna("")
 
+    # Shopify fills Shipping Method only on an order's first row; copy it to every row of the order
+    # so the express filter still works when that first item is already fulfilled
+    if "Order#" in norm.columns and "_ShippingMethod" in norm.columns:
+        ship = norm["_ShippingMethod"].where(norm["_ShippingMethod"].astype(str).str.strip().ne("") & norm["_ShippingMethod"].notna())
+        order_ship = ship.groupby(norm["Order#"].astype(str)).transform("first")
+        norm["_ShippingMethod"] = ship.fillna(order_ship)
+
     # Remove cancelled
     if cancelled_ids and "Order#" in norm.columns:
         norm = norm[~norm["Order#"].astype(str).isin(cancelled_ids)].copy()
